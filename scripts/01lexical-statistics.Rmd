@@ -1,0 +1,134 @@
+---
+title: "01. Лексическая статистика"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Загрузка данных
+
+Текст в колонке csv-таблицы. 
+
+```{r}
+library(readr)
+data <- read_csv("eu2022/data/ru_stateduma/c1.csv")
+```
+
+### Токенизация: деление текстов на слова
+
+```{r}
+library(dplyr)
+library(tidytext)
+data_words <- data %>% unnest_tokens(words, text)
+data_words
+```
+
+### Подсчет частотности слов в тексте
+
+```{r}
+freqlist <-data_words %>% count(words, sort=TRUE)
+freqlist
+```
+
+Общий объем корпуса: 
+```{r}
+sum(freqlist$n)
+```
+
+Размер словаря: 
+```{r}
+nrow(freqlist)
+```
+
+
+### Распределение частотности слов
+
+Сохраним топ-50 самых частотных слов.
+
+```{r}
+freq_top50 <- freqlist %>% top_n(50)
+```
+
+Распределение частотностей топ-50 самых частотных слов:
+
+```{r}
+ggplot(freq_top50, aes(reorder(words, -n), n)) +
+  geom_point(stat = "identity") +
+  geom_line(group = 1) +
+  theme(axis.text.x = element_text(angle = 45, vjust = 0.7)) +
+  xlab("Слова") +
+  ylab("Частотность") +
+  ggtitle("График частотности топ-50 слов")
+```
+
+Распределение частотности слов — добавляем к частотному списку колонку
+«ранг» (порядковый номер в списке по убыванию частотности):
+
+```{r}
+data_freq <- freqlist %>% mutate(rank = row_number())
+data_freq
+```
+
+График всего частотного распределения:
+
+```{r}
+ggplot(data_freq, aes(rank, n)) + geom_point(stat = "identity", cex=0.5) +
+  geom_line(group = 1) +
+  xlab("Rank") +
+  ylab("Frequency") +
+  ggtitle("The Zipf Curve")
+```
+
+Редкие слова из «хвоста распределения»:
+
+```{r}
+freqlist %>% tail(20)
+```
+
+Слова из середины частотного списка:
+
+```{r}
+freqlist %>% filter(row_number() > nrow(freqlist)/2)
+```
+
+Более-менее частотные слова: 
+
+```{r}
+freqlist %>% filter(n < 50) 
+```
+
+### Закон Ципфа
+
+Распределение частотности слов — график в логарифмической шкале:
+
+```{r}
+ggplot(data_freq, aes(rank, n)) + geom_point(stat = "identity", cex=0.5) +
+  geom_line(group = 1) +
+  scale_y_log10() +
+  scale_x_log10() +
+  xlab("Rank") +
+  ylab("Frequency") +
+  ggtitle("The Zipf Curve (log)")
+```
+
+### Скорость роста словаря
+
+```{r}
+vocab <- data_words %>% group_by(date) %>%
+    summarize(len = n(), vocab = list(unique(words)))
+```
+
+```{r}
+library(purrr)
+vocab_growth <- vocab %>% mutate(tot_vocab = accumulate(vocab, union)) %>%
+    mutate(tot_len = cumsum(len)) %>%
+    rowwise %>% mutate(vocab_size = length(tot_vocab))
+```
+
+```{r}
+vocab_growth %>% ggplot(aes(tot_len, vocab_size)) + geom_point() +
+    geom_line(group=1)
+```
+
