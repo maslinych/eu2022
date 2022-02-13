@@ -1,0 +1,295 @@
+\documentclass[svgnames]{beamer}
+
+
+\mode<presentation>
+{
+  \usetheme[titleformat=smallcaps,numbering=fraction,progressbar=frametitle]{metropolis}
+  \usecolortheme[light,accent=orange]{solarized}
+  %\usecolortheme[named=Goldenrod]{structure}
+  % or ...
+
+  \setbeamercovered{transparent}
+  % or whatever (possibly just delete it)
+}
+
+
+% \usepackage{mathtext}
+\usepackage[utf8]{inputenc}
+\usepackage[english,russian]{babel}
+\usepackage{cmap}
+\hypersetup{unicode=true}
+\graphicspath{{images/}{slides/images}}
+
+
+\title[QTA 02] % (optional, use only with long paper titles)
+{Препроцессинг}
+
+\subtitle
+{Квантитативный анализ текста} % (optional)
+
+\author%[Author, Another] % (optional, use only with lots of authors)
+{Кирилл Александрович Маслинский}
+% - Use the \inst{?} command only if the authors have different
+%   affiliation.
+
+\institute%[Universities of Somewhere and Elsewhere] % (optional, but mostly needed)
+{НИУ ВШЭ Санкт-Петербург}
+% - Use the \inst command only if there are several affiliations.
+% - Keep it simple, no one is interested in your street address.
+
+\date%[Short Occasion] % (optional)
+{14.02.2022 / 02}
+
+\subject{natural language processing, text mining}
+% This is only inserted into the PDF information catalog. Can be left
+% out. 
+
+
+\AtBeginSubsection[]
+{
+  \begin{frame}<beamer>[plain]{План}
+    \tableofcontents[sectionstyle=show/hide,subsectionstyle=show/shaded/hide]
+  \end{frame}
+}
+
+\newcommand{\tb}[1]{\colorbox{yellow}{#1}\space}
+\newcommand{\Sp}[1]{\colorbox{green}{#1}\space}
+\newcommand{\Sn}[1]{\colorbox{red}{#1}\space}
+
+
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}
+  \frametitle{Как считать слова}
+  \Large
+  Чтобы оценить частотное распределение слов, нам необходимо посчитать
+  количество употреблений  (\structure{tokens}) каждого слова
+  (\structure{type}) в тексте. 
+  
+  \begin{block}{Qs:}
+  \begin{itemize}
+  \item Что является токеном? (Что считать, а что не считать?)
+  \item Какие токены считать одним и тем же словом?
+  \end{itemize}
+  \end{block}
+\end{frame}
+
+\section{Токены}
+
+\begin{frame}
+\LARGE
+  \frametitle{Токенизация}
+\only<1>{
+  \begin{block}{Сколько токенов?}
+    Ой какие фотки<smile006><smile006><smile006> А разве роды в 38недель не считаются нормой?
+  \end{block}
+}
+\only<2>{
+  \begin{block}{11? (разделим по пробелам)}
+    \tb{Ой} \tb{какие} \tb{фотки<smile006><smile006><smile006>} \tb{А} \tb{разве} \tb{роды} \tb{в} \tb{38недель} \tb{не} \tb{считаются} \tb{нормой?}
+  \end{block}
+}
+\only<3>{
+  \begin{block}{11? (возьмем только слова)}
+    \tb{Ой} \tb{какие} \tb{фотки}<smile006><smile006><smile006> \tb{А} \tb{разве} \tb{роды} \tb{в} 38\tb{недель} \tb{не} \tb{считаются} \tb{нормой}?
+  \end{block}
+}
+\only<4>{
+  \begin{block}{13? (пунктуация тоже нужна)}
+    \tb{Ой} \tb{какие} \tb{фотки} \tb{<smile006><smile006><smile006>} \tb{А}
+    \tb{разве} \tb{роды} \tb{в} 38\tb{недель} \tb{не} \tb{считаются}
+    \tb{нормой} \tb{?}
+  \end{block}
+}
+\only<5>{
+  \begin{block}{14? (всё-таки исправим опечатку)}
+    \tb{Ой} \tb{какие} \tb{фотки} \tb{<smile006><smile006><smile006>} \tb{А}
+    \tb{разве} \tb{роды} \tb{в} \tb{38} \tb{недель} \tb{не} \tb{считаются}
+    \tb{нормой} \tb{?}
+  \end{block}
+}
+\only<6>{
+  \begin{block}{16? (посчитаем смайлики раздельно)}
+    \tb{Ой} \tb{какие} \tb{фотки} \tb{<smile006>} \tb{<smile006>} \tb{<smile006>} \tb{А}
+    \tb{разве} \tb{роды} \tb{в} \tb{38} \tb{недель} \tb{не} \tb{считаются}
+    \tb{нормой} \tb{?}
+  \end{block}
+}
+\end{frame}
+
+\begin{frame}
+
+  \frametitle{N-граммы}
+
+  N последовательно стоящих друг за другом слов.
+
+  \begin{block}{Униграммы}
+    \alert<2>{Восторг} \alert<3>{внезапный} \alert<4>{ум}
+    \alert<5>{пленил} .
+  \end{block}
+
+  \begin{block}{Биграммы}
+  \alert<2>{Восторг} \alert<2-3>{внезапный} \alert<3-4>{ум}
+  \alert<4-5>{пленил} \alert<5>{<.>}
+  \end{block}
+
+  \begin{block}{Триграммы}
+  \alert<2>{<s>}  \alert<2-3>{Восторг} \alert<2-4>{внезапный}
+  \alert<3-5>{ум} \alert<4-5>{пленил} \alert<5>{<.>}
+  \end{block}
+\end{frame}
+
+\section{Типы}
+
+\begin{frame}
+  \frametitle{Стемминг}
+
+  \LARGE
+\only<1>{
+  \begin{block}{How many types?}
+    Кукушка кукушонку купила капюшон. Кукушонок в капюшоне смешон.
+  \end{block}
+}
+\only<2>{
+  \begin{block}{How many types?}
+    Кукушка кукушонку купила \alert{капюшон}. Кукушонок в капюшон\alert{-е} смешон.
+  \end{block}
+}
+\only<3>{
+  \begin{block}{How many types?}
+    Кукушка кукушон\alert{-ку} купила капюшон. \alert{к}укушон\alert{-ок} в капюшоне смешон.
+  \end{block}
+}
+\only<4>{
+  \begin{block}{How many types?}
+    \alert{к}укуш\alert{-ка} кукуш\alert{-онку} купила капюшон. кукуш\alert{-онок} в капюшоне смешон.
+  \end{block}
+}
+\only<5>{
+  \begin{block}{How many types?}
+    кукуш кукуш купи капюшон. кукуш в капюшон смеш.
+  \end{block}
+}
+
+\hrulefill\normalsize
+  \begin{description}
+  \item[стемминг / stemming] — cut a word to its stem
+  \end{description}
+\end{frame}
+
+% \begin{frame}
+%   \frametitle{Stemming for Russian}
+%   \begin{itemize}
+%   \item Porter stemmer
+%   \item Stemka
+%   \end{itemize}
+% \end{frame}
+
+
+\begin{frame}
+  \frametitle{Морфологический анализ: лемматизация}
+  \LARGE
+  \begin{block}{Сколько слов?}
+    кукушка кукушонок купить капюшон. кукушонок в капюшон смешной.
+  \end{block}
+
+\hrulefill\normalsize
+  \begin{description}
+  \item[лемматизация / lemmatization] — приведение слова к начальной форме
+  \end{description}
+\end{frame}
+
+
+\begin{frame}
+  \frametitle{Омонимия языковых знаков}
+  \LARGE
+  \begin{block}{Одно слово или разные?}
+    Косил \alert<1>{косой косой косой}.
+  \end{block}
+\only<1>{\normalsize
+  коса=S,жен,неод=твор,ед\\
+  косая=S,жен,од=(род,ед|дат,ед|твор,ед|пр,ед)\\
+  косой=S,муж,од=им,ед\\
+  косой=A=(им,ед,полн,муж|род,ед,полн,жен|
+  дат,ед,полн,жен|вин,ед,полн,муж,неод|твор,ед,полн,жен| пр,ед,полн,жен)
+}
+\only<2>{
+  \alert{косить}=V,несов=прош,ед,изъяв,муж,пе\\
+  \alert{косой}=S,муж,од=им,ед\\
+  \alert{косой}=A=твор,ед,полн,жен\\
+  \alert{коса}=S,жен,неод=твор,ед
+}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Морфологический анализ для русского}
+  \begin{itemize}
+  \item Mystem (леммы, части речи, грамматические формы, снятие
+    омонимии), прямо в R
+  \item udpipe (то же + синтаксические функции), прямо в R
+  \item Stanza (то же + синтаксические функции), нейронная сеть: требуется python, медленный
+  \item DeepPavlov (то же + синтаксические функции), нейронная сеть: требуется python, медленный
+  \end{itemize}
+\end{frame}
+
+\begin{frame}
+  \frametitle{Терминология}
+  \begin{description}
+  \item[корпус] — здесь: исследуемая коллекция текстов
+  \item[token] — словоупотребление, минимальный сегмент текста
+  \item[словоформа / wordform] — слово в тексте, измененное — падеж, время и т.п.
+  \item[лексема / lexeme] — слово в словаре, совокупность всех форм
+  \item[стемминг / stemming] — урезание слова до основы
+  \item[лемматизация / lemmatization] — приведение слова к начальной форме
+  \end{description}
+\end{frame}
+
+\section{Стоп-слова и частотные списки}
+
+\begin{frame}
+  \frametitle{Стоп-слова} Простейший способ уменьшить число
+  лексических переменных — просто удалить \alert{наименее информативные} слова:
+
+  \begin{itemize}
+  \item Статический список:
+
+без
+более
+бы
+был
+была
+были
+было
+быть
+в
+вам
+вас
+весь
+во
+вот
+все
+всего
+всех
+вы
+где
+да
+даже
+для ...
+
+  \item Динамический список:
+
+    \begin{itemize}
+    \item Слишком частотные (N самых частотных; частотность больше k)
+    \item Слишком редкие (частотность меньше k)
+    \item Слишком короткие (меньше M букв)
+    \item По документной частоте (присутствующие более чем в k\%
+      текстов или менее чем в k текстах)
+    \end{itemize}
+  \end{itemize}
+\end{frame}
+
+\end{document}
