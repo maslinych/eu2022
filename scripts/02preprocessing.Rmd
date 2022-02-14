@@ -36,7 +36,7 @@ txt %>% unnest_tokens(bigram, text, token = "ngrams", n = 3)
 
 ```{r}
 library(readr)
-silver_poems <- read_csv("~/cmta2021/data/silver_poems.csv", locale = readr::locale(encoding = "cp1251"))
+silver_poems <- read_csv("~/eu2022/data/silver_poems.csv", locale = readr::locale(encoding = "cp1251"))
 ```
 
 Извлекаем биграммы:
