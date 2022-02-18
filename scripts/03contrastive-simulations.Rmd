@@ -1,0 +1,279 @@
+---
+title: "Контрастивный анализ. Искусственные данные"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Генерация искусственных распределений
+
+Основа для генерации — частотный список лемм из ДетКорпуса
+
+```{r}
+library(readr)
+dcfreq <- read_csv("~/eu2022/data/detcorpus-freqlist.csv")  %>%
+    mutate(ipm = Freq/sum(Freq)*1e6)
+```
+
+Объем лексикона:
+
+```{r}
+V <- nrow(dcfreq)
+V
+```
+
+Объем корпуса:
+
+```{r}
+N <- sum(dcfreq$Freq)
+N
+```
+
+Скорость роста словаря (Baayen G):
+
+```{r}
+V1 <- sum(dcfreq$Freq==1)
+V1/N
+```
+
+Для того чтобы учесть слова, которые не встретились в корпусе, добавим
+псевдослово «HAPAX» с вероятностью по оценке Baayen G.
+
+```{r}
+library(dplyr)
+dcfreq.p <- rbind(dcfreq, list(lemma="HAPAX", Freq=V1)) %>%
+    mutate(p = Freq/sum(Freq))
+```
+
+Для воспроизводимости зафиксируем случайные числа: 
+
+```{r}
+set.seed(89)
+```
+
+Две случайных выборки по 100 тыс слов каждая, одинаковые вероятности
+
+```{r}
+c1 <- sample(dcfreq.p$lemma, size=1e5, replace=TRUE, prob=dcfreq.p$p)
+c1[c1=="HAPAX"] <- sample(1:1e4, sum(c1=="HAPAX"))
+c2 <- sample(dcfreq.p$lemma, size=1e5, replace=TRUE, prob=dcfreq.p$p)
+c2[c2=="HAPAX"] <- sample(1:1e4, sum(c2=="HAPAX"))
+```
+
+Частотные списки: 
+
+```{r}
+c1.f <- tibble(lemma=c1) %>% count(lemma, sort=TRUE)
+c2.f <- tibble(lemma=c2) %>% count(lemma, sort=TRUE)
+```
+
+Объединим частотные списки в один
+
+```{r}
+c.both <- bind_rows(c1=c1.f, c2=c2.f, .id="corpus")
+```
+
+Составим сравнительную таблицу
+
+```{r}
+library(tidyr)
+c.wide <- c.both %>%
+    group_by(corpus) %>%
+    pivot_wider(names_from = corpus, values_from = n, values_fill = 0)
+```
+
+Слова, которые встретились только в одном из корпусов:
+
+```{r}
+c.n0 <- c.wide %>%
+    filter(c1 == 0 | c2 == 0) 
+```
+
+Определим функцию для вычисления Dunning log-likelihood (G^2):
+
+```{r}
+g2 = function(a, b) {
+  c = sum(a)
+  d = sum(b)
+  E1 = c * ((a + b) / (c + d))
+  E2 = d * ((a + b) / (c + d))
+  return(2*((a*log(a/E1+1e-7)) + (b*log(b/E2+1e-7))))
+}
+```
+
+Добавим значение G2, отсортируем по его величине:
+
+```{r}
+c.ll <- c.wide %>%
+    mutate(g2 = g2(c1, c2)) %>%
+    arrange(desc(g2))
+c.ll
+```
+
+Зависимость между частотностью слова и значением G2
+
+```{r}
+library(ggplot2)
+c.ll %>%
+    mutate(s = c1+c2) %>%
+    ggplot(aes(y = g2, x = s, alpha = 0.3)) + geom_point()
+```
+
+Бинаризованный график в логарифмической шкале частотностей
+
+```{r}
+library(ggplot2)
+c.ll %>%
+    mutate(s = c1+c2) %>%
+    mutate(ls = 10^ceiling(log10(s))) %>%
+    mutate(g = cut(g2, breaks = c(0, 3.8, 6.6, 10.8, 15.1, 100))) %>%
+    count(g, ls) %>% 
+    ggplot(aes(y = g, x = ls, fill = n)) + geom_tile() +
+    geom_text(aes(label = n), color = "white", size = 10) +
+    scale_x_log10()
+```
+
+### Искусственная разница
+
+Создадим теперь два искусственных корпуса с различной вероятностью
+слов. Для наглядности сделаем так, что во втором корпусе все слова на
+букву «ц» вдвое более вероятны, чем в первом корпусе.
+
+Самые частотные слова на букву ц
+
+```{r}
+library(stringr)
+dcfreq %>% filter(str_detect(lemma, "^ц.*")) %>% head(20)
+```
+
+Модифицируем частотности и вычисляем вероятности
+
+```{r}
+dc.tse <- dcfreq %>%
+    mutate(f2 = ifelse(str_detect(lemma, "^ц.*"), Freq*2, Freq)) %>%
+    mutate(p1 = Freq/sum(Freq), p2 = f2/sum(f2)) %>%
+    select(lemma, f1 = Freq, f2, p1, p2)
+```
+
+Для удобства определим функцию, которая сразу возвращает частотный
+список по списку лемм и вероятностей:
+
+```{r}
+generate_freqlist <- function(n, lemmas, prob) {
+    c1 <- sample(lemmas, size=n, replace=TRUE, prob=prob)
+    nhapax <- sum(c1=="HAPAX")
+    c1[c1=="HAPAX"] <- sample(1:(2*nhapax), nhapax)
+    tibble(lemma=c1) %>% count(lemma, sort=TRUE)
+}
+```
+
+Сгенерируем два новых частотных списка и объединим их в общую таблицу:
+
+```{r}
+s1 <- generate_freqlist(1e5, dc.tse$lemma, dc.tse$p1)
+s2 <- generate_freqlist(1e5, dc.tse$lemma, dc.tse$p2)
+s.wide <- bind_rows(c1=s1, c2=s2, .id="corpus") %>%
+    group_by(corpus) %>%
+    pivot_wider(names_from = corpus, values_from = n, values_fill = 0)
+```
+
+Рассчитаем G2:
+
+```{r}
+s.ll <- s.wide %>%
+    mutate(g2 = g2(c1, c2)) %>%
+    arrange(desc(g2))
+s.ll
+```
+
+Посмотрим результаты G2 только по словам на ц-:
+
+```{r}
+s.ll %>% filter(str_detect(lemma, "^ц.*")) %>% View
+```
+
+Иллюстрация, где слова на ц- выделены красным: 
+
+```{r}
+s.ll %>%
+    mutate(s = c1+c2) %>%
+    mutate(diff = ifelse(str_detect(lemma, "^ц.*"), TRUE, FALSE)) %>%
+    ggplot(aes(y = g2, x = s, alpha = 0.3, color = diff)) + geom_point() +
+    scale_color_manual(values = c("gray", "red")) +
+    scale_x_log10() 
+```
+
+То же, с порогами отсечения:
+
+```{r}
+s.ll %>%
+    mutate(s = c1+c2) %>%
+    mutate(diff = ifelse(str_detect(lemma, "^ц.*"), TRUE, FALSE)) %>%
+    ggplot(aes(y = g2, x = s, alpha = 0.3, color = diff)) + geom_point() +
+    scale_color_manual(values = c("gray", "red")) +
+    scale_x_log10() +
+    geom_hline(yintercept = 11, color = "red", alpha = 0.5) +
+    geom_vline(xintercept = 100, color = "red", alpha = 0.5)
+```
+
+## Simple maths Адама Килгариффа
+
+Сначала рассмотрим на примере одинаковых сгенерированных корпусов без
+различий в вероятности слов. Сразу используем разные константы: +1 и +100.
+
+```{r}
+c.sm <- c.wide %>%
+    mutate(sm1 = (c1+1)/(c2+1), sm100 = (c1+100)/(c2+100)) %>%
+    mutate(s = c1+c2) %>%
+    arrange(desc(sm1))
+```
+
+График соотношения значений sm1 и sm100 и суммарной частотности слова
+в случае отсутствия различий в вероятности слов при генерации корпуса. 
+
+```{r}
+c.sm %>%
+    ggplot(aes(x = s, y = sm1, alpha = 0.3)) +
+    geom_point() +
+    geom_point(aes(y = sm100), shape = 4, color = "blue", alpha=1)  +
+    geom_hline(yintercept = 1, linetype = "longdash", alpha = 0.5, color = "red") +
+    scale_x_log10()
+```
+
+Теперь посмотрим на корпусе, где заложены различия в вероятностях слов.
+
+```{r}
+s.sm <- s.wide %>%
+    mutate(sm1 = (c2+1)/(c1+1), sm100 = (c2+100)/(c1+100)) %>%
+    mutate(s = c1+c2) %>%
+    arrange(desc(sm1))
+```
+
+График для sm1
+
+```{r}
+s.sm %>%
+    mutate(diff = ifelse(str_detect(lemma, "^ц.*"), TRUE, FALSE)) %>%
+    ggplot(aes(x = s, y = sm1, alpha = 0.3, color = diff)) +
+    geom_point() +
+    geom_hline(yintercept = 1, linetype = "longdash", alpha = 0.5, color = "black") +
+    geom_hline(yintercept = 2, linetype = "longdash", alpha = 1, color = "red") +
+    scale_x_log10() +
+    scale_color_manual(values = c("gray", "red"))
+```
+
+То же, для sm100 
+
+```{r}
+s.sm %>%
+    mutate(diff = ifelse(str_detect(lemma, "^ц.*"), TRUE, FALSE)) %>%
+    ggplot(aes(x = s, y = sm100, alpha = 0.3, color = diff)) +
+    geom_point() +
+    geom_hline(yintercept = 1, linetype = "longdash", alpha = 0.5, color = "black") +
+    geom_vline(xintercept = 100, alpha = 0.3, color = "red") +
+    geom_hline(yintercept = 1.25, alpha = 0.3, color = "red") +
+    scale_x_log10() +
+    scale_color_manual(values = c("gray", "red"))
+```
