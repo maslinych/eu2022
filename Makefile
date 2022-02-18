@@ -5,7 +5,7 @@ slides := $(lectures:.tex=.pdf)
 scripts := $(shell git ls-files scripts/*.Rmd)
 reader := 
 labs := 
-data := data/ru_stateduma/c1.csv
+data := data/ru_stateduma/c1.csv data/detcorpus_freqlist.csv
 SERVER := rstudio
 SERVERDIR := /var/lib/rstudio-server/data/eu2022
 
