@@ -24,5 +24,5 @@ publish: $(slides) $(scripts) $(labs)
 	scp $(labs) $(HOST):$(DIR)/
 
 upload: $(scripts)
-	scp $(scripts) $(SERVER):$(SERVERDIR)/scripts/
-	scp $(data) $(SERVER):$(SERVERDIR)/data/
+	rsync -avP --stats -e ssh $(scripts) $(SERVER):$(SERVERDIR)/scripts/
+	rsync -avP --stats -e ssh $(data) $(SERVER):$(SERVERDIR)/data/
