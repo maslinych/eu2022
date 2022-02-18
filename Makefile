@@ -5,7 +5,7 @@ slides := $(lectures:.tex=.pdf)
 scripts := $(shell git ls-files scripts/*.Rmd)
 reader := 
 labs := 
-data := data/ru_stateduma/c1.csv data/detcorpus_freqlist.csv
+data := data/ru_stateduma/c1.csv data/detcorpus-freqlist.csv
 SERVER := rstudio
 SERVERDIR := /var/lib/rstudio-server/data/eu2022
 
@@ -26,3 +26,4 @@ publish: $(slides) $(scripts) $(labs)
 upload: $(scripts)
 	rsync -avP --stats -e ssh $(scripts) $(SERVER):$(SERVERDIR)/scripts/
 	rsync -avP --stats -e ssh $(data) $(SERVER):$(SERVERDIR)/data/
+	ssh $(SERVER) chown -R rstudio:eu2022 $(SERVERDIR) 
