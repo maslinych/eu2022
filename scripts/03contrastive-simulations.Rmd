@@ -13,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ```{r}
 library(readr)
+library(dplyr)
 dcfreq <- read_csv("~/eu2022/data/detcorpus-freqlist.csv")  %>%
     mutate(ipm = Freq/sum(Freq)*1e6)
 ```
@@ -43,7 +44,7 @@ V1/N
 
 ```{r}
 library(dplyr)
-dcfreq.p <- rbind(dcfreq, list(lemma="HAPAX", Freq=V1)) %>%
+dcfreq.p <- rbind(dcfreq, list(lemma="HAPAX", Freq=V1, ipm=V1/V*1e6)) %>%
     mutate(p = Freq/sum(Freq))
 ```
 
@@ -277,3 +278,86 @@ s.sm %>%
     scale_x_log10() +
     scale_color_manual(values = c("gray", "red"))
 ```
+
+## Логарифм отношения шансов
+
+Функция для расчета отношения шансов:
+
+```{r}
+log_odds <- function(a, b) {
+    odds_a <- a / (sum(a) - a)
+    odds_b <- b / (sum(b) - b)
+    return(log(odds_a/odds_b))
+}
+```
+
+Функция для расчета взвешенного отношения шансов
+
+```{r}
+weighted_log_odds <- function(a, b, prior_a, prior_b) {
+    odds_a <- (a + prior_a) / (sum(a) + sum(prior_a) - a - prior_a)
+    odds_b <- (b + prior_b) / (sum(b) + sum(prior_b) - b - prior_b)
+    return(log(odds_a/odds_b))
+}
+```
+
+Сначала на данных без различий в вероятностях слов:
+
+Информативный prior на основании суммарной частоты слова в обоих корпусах
+
+```{r}
+c.lo <- c.sm %>% 
+    mutate(lo = log_odds(c1+1, c2+1)) %>%
+    mutate(wlo = weighted_log_odds(c1, c2, s, s)) %>%
+    arrange(desc(wlo))
+```
+
+
+Сравнение взвешенного и простого log-odds
+
+```{r}
+c.lo %>%
+    ggplot(aes(y = wlo, x = lo, size=log10(s))) +geom_point(alpha=0.3)
+```
+
+Распределение величин простого и взвешенного отношения шансов с учетом
+частотности слов:
+
+```{r}
+c.lo %>%
+    ggplot(aes(y = lo, x =Freq, alpha=0.3)) +geom_point() + scale_x_log10() +
+    geom_point(y = c.lo$wlo, color="blue")
+```
+
+Проверка на данных с различными вероятностями:
+
+```{r}
+s.lo <- s.sm %>%
+    mutate(lo = log_odds(c2+1, c1+1)) %>%
+    mutate(wlo = weighted_log_odds(c2, c1, s, s)) %>%
+    arrange(desc(wlo))
+```
+
+График:
+
+```{r}
+s.lo %>%
+    mutate(diff = ifelse(str_detect(lemma, "^ц.*"), TRUE, FALSE)) %>%
+    ggplot(aes(y = lo, x = s, color = diff, alpha=0.3)) +geom_point() +
+    scale_x_log10() + 
+    scale_color_manual(values = c("gray", "red"))
+```
+
+Соотношение шансов по оценкам simple maths +1, +100 и log_odds и
+weighted_log_odds
+
+```{r}
+s.lo %>% filter(str_detect(lemma, "^ц")) %>%
+    arrange(desc(c2)) %>%
+    mutate(e = exp(lo), ew = exp(wlo))
+```
+
+
+
+
+
