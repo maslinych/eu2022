@@ -1,0 +1,137 @@
+---
+title: 4. Векторная модель документа
+author: Kirill Maslinsky
+output: html_document
+editor_options: 
+  chunk_output_type: console
+  code_folding: show
+---
+
+Install packages, if necessary. 
+
+```{r eval=FALSE}
+install.packages("lsa")
+install.packages("reshape2")
+```
+
+Load State of the Union data:
+
+```{r}
+library(sotu)
+data(sotu_text)
+data(sotu_meta)
+library(dplyr)
+sou <- bind_cols(sotu_meta, text=sotu_text)
+```
+
+## Vector space model of text
+
+Actually, we have already seen it without naming it. When text is
+represented in wide format (a row for a document, a column for a
+word), each document is reduced to a series of numbers — a vector.
+Since all the documents in a table share the same columns, they are
+effectively put in the same *vector space*. This mean that
+mathematical notions of **distance** and **angle** now may be applied
+to compare documents.
+
+Vectors for documents having many words in common and in similar
+proportions will be close in the space. Vectors for documents, sharing
+many common words, but maybe with varying proportions will have a
+small angle between them. 
+
+To evaluate documents' similarity in content it is more useful to
+inspect angles (cosine of the angle, to be more exact).
+
+
+```{r}
+library(tidytext)
+library(quanteda)
+modal.dtm <- sou %>%
+    tail(25) %>% 
+    unnest_tokens(word, text) %>%
+    filter(word %in% c("can", "must", "may")) %>%
+    dplyr::count(president, word) %>%
+    cast_dfm(president, word, n)
+```
+
+This form of presentation of text is so widely used that it has its
+own name — *document-term matrix*.
+
+Below is the matrix of cosine distances between these vectors. Values
+closer to 1 mean more similar documents.
+
+```{r}
+library(quanteda.textstats)
+d <- textstat_simil(modal.dtm, method="cosine", margin="documents")
+```
+
+## Weighted frequency. TF-IDF
+
+Not all words are equally useful to compare documents' content. 
+Those words encountered once (hapax legomena) are of no use for
+comparison. Words found in every document also doesn't help to
+distinguish text content. The most useful ones are in the middle. To
+give them more weight in computing docuemnt similarity, TF-IDF was
+introduced. 
+
+TF-IDF stands for (term frequency — inverse document frequency).
+Support for TF-IDF computation is ubiquitous in R packages designed
+for text processing. Here we will use the version provided by
+tidytext.
+
+```{r}
+sou.tfidf <- sou %>%
+    unnest_tokens(word, text) %>%
+    dplyr::count(year, word) %>%
+    bind_tf_idf(word, year, n) %>%
+    arrange(desc(tf_idf))
+```
+
+Words suppressed by TF-IDF:
+
+```{r}
+sou.tfidf %>%
+    filter(tf_idf==0) %>%
+    select(word) %>%
+    distinct()
+```
+
+## Measuring inter-document similarity
+
+Now we are ready to measure the similarity of speeches based on TF-IDF
+scores. We omit words that have 0 TF-IDF, and those that are
+encountered less than 10 times in the corpus.
+
+```{r}
+sou.dtm <- sou.tfidf %>%
+    filter(!tf_idf==0) %>%
+    cast_dfm(year, word, n) %>%
+    dfm_trim(min_termfreq=50, termfreq_type="count") %>%
+    dfm_tfidf
+```
+
+
+Now we calculate cosine distance for all pairs of speeches.
+
+```{r}
+sou.d <- textstat_simil(sou.dtm, method="cosine", margin="documents")
+```
+
+And finally plot speech similarity graph (as in the [paper by Rule et
+al.](http://www.pnas.org/content/112/35/10837)).
+
+```{r}
+library(ggplot2)
+library(forcats)
+dist.df <- sou.d %>% as.data.frame
+dist.m <- rbind(dist.df, select(dist.df, document1=document2, document2=document1, cosine))
+
+dist.m %>%
+    ggplot(aes(x = fct_reorder(document1, as.integer(as.character(document1))), y = fct_reorder(document2, as.integer(as.character(document2))))) +
+    geom_tile(aes(fill = cosine)) +
+    theme(axis.text.x = element_text(angle = 90)) +
+    scale_x_discrete(breaks=seq(1790, 2010, 10)) +
+    scale_y_discrete(breaks=seq(1790, 2010, 10)) +
+    scale_fill_gradient2(low = "white", high="darkblue", midpoint=0.5, mid="steelblue") 
+```
+
