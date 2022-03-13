@@ -312,6 +312,10 @@ c.lo <- c.sm %>%
     arrange(desc(wlo))
 ```
 
+```{r}
+c.lo %>%
+    ggplot(aes(y = sm1, x = lo, size=log10(s))) +geom_point(alpha=0.3)
+```
 
 Сравнение взвешенного и простого log-odds
 
@@ -325,7 +329,7 @@ c.lo %>%
 
 ```{r}
 c.lo %>%
-    ggplot(aes(y = lo, x =Freq, alpha=0.3)) +geom_point() + scale_x_log10() +
+    ggplot(aes(y = lo, x = s, alpha=0.3)) +geom_point() + scale_x_log10() +
     geom_point(y = c.lo$wlo, color="blue")
 ```
 

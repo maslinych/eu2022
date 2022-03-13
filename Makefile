@@ -5,7 +5,7 @@ slides := $(lectures:.tex=.pdf)
 scripts := $(shell git ls-files scripts/*.Rmd)
 reader := 
 labs := 
-data := data/ru_stateduma/c1.csv data/detcorpus-freqlist.csv
+data := $(wildcard data/ru_stateduma/*.csv) data/detcorpus-freqlist.csv $(wildcard data/ru_stateduma/*.txt)
 SERVER := rstudio
 SERVERDIR := /var/lib/rstudio-server/data/eu2022
 
