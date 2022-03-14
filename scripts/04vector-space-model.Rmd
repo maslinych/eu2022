@@ -135,3 +135,15 @@ dist.m %>%
     scale_fill_gradient2(low = "white", high="darkblue", midpoint=0.5, mid="steelblue") 
 ```
 
+## Hierarchical clusterization
+
+```{r}
+plot(hclust(as.dist(sou.d)))
+```
+
+
+```{r}
+library(dendextend)
+dend <- as.dendrogram(hclust(as.dist(sou.d)))
+plot(dend)
+```
