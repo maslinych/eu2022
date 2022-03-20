@@ -1,0 +1,272 @@
+---
+title: "Классификация текстов"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Кейс: гендерная специфика у авторов детского детектива
+
+```{r}
+library(readr)
+meta <- read_csv("~/eu2022/data/detective/metadata.csv")
+```
+
+Список авторов и текстов: 
+
+```{r}
+library(dplyr)
+library(stringr)
+detectives <- meta %>% filter(str_detect(genre, "detective")) %>%
+    filter(year > 1990) %>% filter(author_sex %in% c("м", "ж")) %>%
+    select(filename, author_sex, author, title, year)
+View(detectives)
+```
+
+Составим список файлов для загрузки
+
+```{r}
+det.files <- paste("~/eu2022/data/detective/", detectives$filename, sep="")
+names(det.files) <- detectives$filename
+```
+
+Загрузим файлы по списку:
+
+```{r}
+det.df <- bind_rows(lapply(det.files, read_tsv, comment="<", col_names=c("word", "lemma", "tag", "const", "var"), quote=""), .id="filename")
+```
+
+Немного статистики: 
+
+```{r}
+det.df %>% count(tag, sort=TRUE)
+```
+
+Отбросим лишнее: пунктуацию, имена, все части речи, кроме
+знаменательных (существительные, прилагательные, глаголы, наречия).
+
+
+```{r}
+det.clean <- det.df %>%
+    filter(tag %in% c("S", "V", "A", "ADV")) %>%
+    filter(!str_detect(const, "имя|фам|отч"))
+nrow(det.clean)
+```
+
+Размер лексикона: 
+
+```{r}
+det.clean %>% distinct(lemma) %>% nrow
+```
+
+Ограничение лексикона: отбросим все леммы, которые встречаются только
+у одного автора (серийность!)
+
+```{r}
+stop.lemmas <- det.clean %>%
+    distinct(lemma, filename) %>%
+    left_join(meta) %>%
+    count(lemma, author) %>%
+    group_by(lemma) %>%
+    filter(n()==1)
+nrow(stop.lemmas)
+```
+
+```{r}
+stop.lemmas %>% arrange(desc(n)) %>% head
+```
+
+```{r}
+det.common <- det.clean %>% anti_join(stop.lemmas)
+nrow(det.common)
+nrow(det.clean)
+```
+
+Чистка окружения (освобождаем оперативную память и место на диске на
+сервере):
+
+```{r}
+rm(det.df, det.clean)
+gc()
+```
+
+Теперь вычислим частотность лексем в документах: 
+
+```{r}
+det.counts <-  det.common %>% count(lemma, filename, sort=TRUE)
+```
+
+Вычисляем TF-IDF.
+
+```{r}
+library(tidytext)
+det.tfidf <- det.counts %>%
+    bind_tf_idf(lemma, filename, n)
+det.tfidf
+```
+
+Отбросим слова с нулевым TF-IDF и построим матрицу термов-документов
+(разреженную! sparse) с помощью функции tidytext::cast_dfm
+
+```{r}
+det.dfm <- det.tfidf %>% filter(tf_idf>0) %>%
+    cast_dfm(filename, lemma, tf_idf)
+```
+
+```{r}
+library(quanteda)
+det.dfm <- det.tfidf %>%
+    filter(tf_idf>0) %>%
+    cast_dfm(filename, lemma, n) %>%
+    dfm_trim(min_termfreq=50, termfreq_type="count") %>%
+    dfm_trim(min_docfreq=0.5, docfreq_type="prop") %>%
+    dfm_tfidf
+```
+
+Вычислим расстояния (косинусное сходство) между документами: 
+
+```{r}
+library(quanteda.textstats)
+d <- textstat_simil(det.dfm, method="cosine", margin="documents")
+```
+
+```{r}
+det.meta <- data.frame(filename=rownames(d)) %>% left_join(meta)
+det.authors <- det.meta$author
+authors.sex <- det.meta$author_sex
+```
+
+Иерархическая кластеризация: 
+
+```{r}
+library(dendextend)
+dend <- as.dendrogram(hclust(as.dist(d)))
+labels(dend) <- det.authors
+labels_colors(dend) <- c("red", "blue")[as.factor(authors.sex)]
+plot(dend)
+```
+
+## Классификация 
+
+### Bernoulli Naive Bayes
+
+Сначала преобразуем матрицу термов-документов в бинарную. 
+
+```{r}
+det.binary <- det.dfm %>% 
+    dfm_weight(scheme="boolean", force=TRUE)
+```
+
+### Разделение на обучающую и тестовую выборки
+
+```{r}
+library(caret)
+set.seed(1991)
+## отберем 10% выборки для тестирования
+split <- createDataPartition(y=authors.sex, p = 0.9, list = FALSE)
+train.data <- det.binary %>% dfm_subset(rownames(det.binary) %in% rownames(det.binary)[split])
+test.data <- det.binary %>% dfm_subset(!rownames(det.binary) %in% rownames(det.binary)[split]) 
+response <- as.factor(det.meta$author_sex)
+trainY <- response[split]
+testY <- response[-split]
+```
+
+Наивный Байес при предсказании может учитывать только те слова, которые встречались в обучающей выборке. Ограничим тестовые данные только теми словами, которые встречались в обучающих данных, с помощью функции quanteda::dfm_match.
+
+```{r}
+test.matched <- test.data %>% 
+    dfm_match(features = featnames(train.data))
+```
+
+### Обучение модели
+
+Обучаем модель: используем функцию из пакета quanteda.textmodels.
+
+```{r}
+model.nb <- textmodel_nb(train.data, trainY, distribution = "Bernoulli")
+summary(model.nb)
+```
+
+
+### Предсказываем класс
+
+```{r}
+predictedY <- predict(model.nb, newdata = test.matched)
+```
+
+```{r}
+predicted.prob <- round(predict(model.nb, newdata = test.matched, type = "prob"),2)
+```
+
+### Оценка качества классификации
+
+```{r}
+cm.nb <- confusionMatrix(data = predictedY, reference = testY, positive="ж", mode = "prec_recall")
+cm.nb
+```
+
+
+### Анализ значимых переменных (предикторов)
+
+Байесовский классификатор в ходе работы вычисляет условные вероятности каждого слова для каждого класса (P(слово|ж) и P(слово|м)). Мы можем непосредственно использовать эти вероятности для оценки наиболее значимых предикторов среди слов (тех, у которых наибольший перекос между классами).
+
+
+```{r}
+vars.nb <- t(model.nb$param) %>% 
+    as.data.frame %>% 
+    rownames_to_column("word") %>% 
+    mutate(lo = log(ж/м)) %>% 
+    arrange(desc(lo))
+```
+
+
+## Обучение классификаторов с помощью пакета caret
+
+Альтернативный путь: используем пакет caret для обучения модели. 
+
+Параметры обучения: 10-кратная кросс-валидация
+
+```{r}
+ctrl <- trainControl(method="cv", 10, verboseIter=TRUE)
+```
+
+
+Обучение модели с помощью caret. Пакет caret предоставляет функцию-обёртку train, общий интерфейс для вызова разных обучающих алгоритмов из разных пакетов. В данном случае мы воспользуемся методом NaiveBayes из пакета klaR.
+
+Этот метод более взыскательный, поэтому потребуется более основательно почистить данные от слишком распространенных слов:
+
+```{r}
+train.trimmed <- train.data %>% 
+    dfm_trim(max_docfreq=0.75, docfreq_type = "prop")
+train.df <- convert(train.trimmed, to = "data.frame")
+test.trimmed <- test.data %>% 
+    dfm_match(features = featnames(train.trimmed)) %>% 
+    convert(to = "data.frame")
+```
+
+
+```{r}
+model.nb2 <- train(train.df, trainY, method="nb", trControl=ctrl)
+## Посмотрите на качество модели
+model.nb2
+```
+
+```{r}
+predicted2 <- predict(model.nb2, newdata = test.trimmed, type="raw")
+```
+
+```{r}
+cm.nb2 <- confusionMatrix(data = predicted2, reference = testY, positive="ж", mode = "prec_recall")
+cm.nb2
+```
+
+### Другие классификаторы, доступные в пакете caret
+
+```{r}
+## Список доступных алгоритмов (классификации и не только)
+names(getModelInfo())
+## См. также https://topepo.github.io/caret/train-models-by-tag.html
+```
+
