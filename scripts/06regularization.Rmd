@@ -1,0 +1,214 @@
+---
+title: Text Mining I. Dimensionality reduction
+author: Kirill Maslinsky
+output: html_document
+editor_options: 
+  chunk_output_type: console
+  code_folding: show
+---
+
+## ‘Dimensionality curse’ and Dimensionality reduction task
+
+Word frequency data are sparse. There are too many ways of saying the
+same thing, there are so many very infrequent words. In any given
+document-term matrix for a moderately sized corpus there will be
+thousands of terms (columns), but more than 90% of the cells will
+contain zeroes. This data sparseness problem impedes the direct usage
+of word counts as a basis for statistical modeling. Methods to
+minimize the number of columns in data (dimensions) are to be applied.
+
+## Machine learning approach: Regularization
+
+Regularization is an approach created in machine learning to deal with
+*model overfitting*. The general idea of regularization is to minimize
+model complexity as much, as it is possible without degrading its
+accuracy.
+
+## Example: logistic regression with regularization for text classification
+
+Install packages, if necessary:
+
+```{r, eval=FALSE}
+install.packages("glmnet")
+install.packages("caret")
+```
+
+### Data preparation
+
+```{r}
+library(manifestoR)
+mp_setapikey("manifesto_apikey.txt")
+```
+
+Obtain the corpus.
+
+```{r}
+us.corpus <- mp_corpus(countryname == "United States")
+ru.corpus <- mp_corpus(countryname == "Russia")
+meta(us.corpus[[1]])
+```
+
+Obtain metadata. 
+
+```{r}
+us.meta <- mp_metadata(countryname == "United States")
+us.meta %>% head
+```
+
+Export the corpus to R's data.frame object.
+
+```{r}
+library(dplyr)
+us.df <- as.data.frame(us.corpus, with.meta = TRUE) %>%
+    mutate(sent_id = row_number())
+```
+
+Lookup the party ids and replace them readable labels.
+
+```{r}
+us.df %>% select(party) %>% distinct()
+us.df <- us.df %>%
+    mutate(party=c("61320"="democratic", "61620"="republican")[as.character(party)]) 
+us.df %>% select(party) %>% distinct()
+```
+
+Load libraries for text processing.
+
+```{r}
+library(tidytext)
+library(stopwords)
+library(stringr)
+```
+
+Transform text data into long format, removing stopwords and numbers on
+the way.
+
+```{r}
+us.long <- us.df %>%
+    unnest_tokens(word, text) %>%
+    filter(! word %in% stopwords("en")) %>%
+    filter(! str_detect(word, "[0-9]+"))
+```
+
+Now we need to create a document-term matrix to train a classifier. We
+will use TF-IDF as a weighting scheme.
+
+```{r}
+us.dtm <- us.long %>%
+    count(sent_id, word) %>%
+    bind_tf_idf(word, sent_id, n) %>% 
+    cast_dfm(sent_id, word, tf_idf)
+us.dtm
+```
+
+```{r}
+library(quanteda)
+us.clean <- us.dtm %>%
+    dfm_wordstem(language = "en") %>%
+    dfm_trim(min_docfreq=0.10) 
+us.clean
+```
+
+### Training set and test set
+
+```{r}
+library(caret)
+set.seed(939)
+## отберем 10% выборки для тестирования
+split <- createDataPartition(y=us.df$party, p = 0.9, list = FALSE)
+train.data <- us.clean %>% dfm_subset(split)
+test.data <- us.clean %>% dfm_subset(!rownames(us.clean) %in% split) 
+response <- as.factor(us.df$party)
+trainY <- response[split]
+testY <- response[-split]
+```
+
+### Train a model
+
+```{r}
+library(glmnet)
+cv.ridge <- cv.glmnet(x=train.data, y=trainY, alpha=0, family="binomial", type.measure="auc", nfolds = 5, lambda = seq(0.001,0.1,by = 0.001), standardize=FALSE)
+```
+
+```{r}
+cv.lasso <- cv.glmnet(x=train.data, y=trainY, alpha=1, family="binomial", type.measure="auc", nfolds = 5, lambda = seq(0.001,0.1,by = 0.001), standardize=FALSE)
+```
+
+```{r}
+cv.elasticnet <- cv.glmnet(x=train.data, y=trainY, family="binomial", type.measure="auc", nfolds = 5, lambda = seq(0.001,0.1,by = 0.001), standardize=FALSE)
+```
+
+### Predict party using the model
+
+```{r}
+predicted.lasso <- as.factor(predict(cv.lasso, test.data, type="class"))
+```
+
+```{r}
+library(e1071)
+cm.lasso <- confusionMatrix(data = predicted.lasso, reference = testY, positive="democratic")
+cm.lasso
+```
+
+```{r}
+predicted.ridge <- as.factor(predict(cv.ridge, test.data, type="class"))
+cm.ridge <- confusionMatrix(data = predicted.ridge, reference = testY, positive="democratic")
+cm.ridge
+```
+
+```{r}
+predicted.elasticnet <- as.factor(predict(cv.elasticnet, test.data, type="class"))
+cm.elasticnet <- confusionMatrix(data = predicted.elasticnet, reference = testY, positive="democratic")
+cm.elasticnet
+```
+
+### Variable analysis
+
+```{r}
+coef(cv.lasso, cv.lasso$lambda.min) %>%
+    as.matrix %>% as.data.frame %>%
+    tibble::rownames_to_column() %>%
+    arrange(-abs(`1`)) %>% View
+```
+
+```{r}
+coef(cv.ridge, cv.ridge$lambda.min) %>%
+    as.matrix %>% as.data.frame %>%
+    tibble::rownames_to_column() %>%
+    arrange(-abs(`1`)) %>% View
+```
+
+```{r}
+coef(cv.ridge, cv.ridge$lambda.1se) %>%
+    as.matrix %>% as.data.frame %>%
+    tibble::rownames_to_column() %>%
+    arrange(-abs(`1`)) %>% View
+```
+
+### Error analysis
+
+```{r}
+test.df <- us.df[-split,]
+misclassified.republicans <- test.df[which(predicted.lasso == "democratic" & testY == "republican"),]
+misclassified.republicans %>% select(date, title) %>% distinct()
+
+misclassified.republicans %>%
+    unnest_tokens(word, text) %>%
+    filter(!word %in% stopwords("en")) %>%
+    count(sent_id, word) %>%
+    cast_dfm(sent_id, word, n) %>%
+    textplot_wordcloud(min_count=2, ordered_color=TRUE)
+```
+
+```{r}
+misclassified.democrats <- test.df[which(predicted.ridge == "republican" & testY == "democratic"),]
+misclassified.democrats %>% select(date, title) %>% distinct()
+
+misclassified.democrats %>%
+    unnest_tokens(word, text) %>%
+    filter(!word %in% stopwords("en")) %>%
+    count(sent_id, word) %>%
+    cast_dfm(sent_id, word, n) %>%
+    textplot_wordcloud(min_count=10)
+```
+
