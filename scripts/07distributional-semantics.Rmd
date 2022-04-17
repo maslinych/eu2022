@@ -1,0 +1,175 @@
+---
+title: "Дистрибутивная семантика"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Кейс: Эпитеты к детям в ДетКорпусе
+
+```{r}
+library(readr)
+library(dplyr)
+library(ggplot2)
+```
+
+Загружаем сохраненные из корпуса данные о сочетаемости слов
+мальчик/девочка/пионер/пионерка с прилагательными:
+
+```{r}
+d <- read_csv("~/eu2022/data/deti-adj.csv")
+d <- read_csv("data/national.csv")
+```
+
+Трансформируем данные (из длинного формата в широкий), чтобы получить
+дистрибутивный вектор для каждого слова.
+
+```{r}
+library(tidyr)
+adj.df <- d %>%
+    pivot_wider(names_from = adj, values_from = f, id_cols = noun, values_fill=0)
+```
+
+Выбираем по 20 самых частотных контекстных существительных к каждому прилагательному:
+
+```{r}
+adj100.df <- d %>%
+    group_by(adj) %>%
+    arrange(desc(f)) %>%
+    slice(1:20) %>%
+    pivot_wider(names_from = adj, values_from = f, id_cols = noun, values_fill=0) %>%
+    column_to_rownames("noun")
+```
+
+### Correspondence analysis (Анализ соответствий)
+
+Снижение размерности таблицы совместной встречаемости (матрицы
+дистрибутивных векторов) с помощью метода анализа соответствий (CA).
+
+```{r}
+library(FactoMineR)
+CA(adj100.df)
+```
+
+Только существительные, встречающиеся со всеми прилагательными:
+```{r}
+adj.common <- adj.df %>%
+    filter(if_all(русский:польский, ~ .x != 0)) %>%
+    column_to_rownames("noun")    
+CA(adj.common)
+```
+
+С более мягким порогом отсечения: 
+
+```{r}
+adj.df %>%
+    mutate(n = rowSums(select(., русский:польский)==0)) %>%
+    filter(n<=1) %>%
+    select(-n) %>%
+    column_to_rownames("noun") %>%
+    CA
+```
+
+Альтернативный график:
+
+```{r}
+library(factoextra)
+fviz_ca_biplot(CA(adj100.df), repel=TRUE)
+```
+
+### LSA — Latent Semantic Analysis
+
+LSA is a technique for dimensionality reduction based on the idea of
+applying trimmed Singular Value Decomposition to the term-document matrix.
+
+
+Сначала подготовим объект класса quanteda::DocumentFeatureMatrix из
+наших данных по сочетаемости прилагательных с существительными: 
+
+```{r}
+library(tidytext)
+library(quanteda)
+adj.dfm <- d %>% cast_dfm(adj, noun, f) %>%
+    dfm_trim(min_docfreq=3, docfreq_type="count")
+```
+
+We first create an LSA space with 100 dimensions for document-term
+matrix, and then for term-document matrix. The former allows us to
+compare documents in this lower-dimensional space, and the latter is
+for comparing words to each other.
+
+Подготовим объекты для снижения размерности: 
+
+```{r}
+library(text2vec)
+lsa.2 =  LSA$new(n_topics = 2)
+```
+
+Сравним прилагательные по наборам :
+
+```{r}
+nouns.lsa2 = fit_transform(adj.dfm, lsa.2)
+nouns.lsa2
+```
+
+```{r}
+colnames(nouns.lsa2) <- c("x", "y")
+nouns.lsa2 %>% as.data.frame %>% rownames_to_column("noun") %>%
+    ggplot(aes(x=x,y=y,label=noun)) +  geom_text()
+```
+
+Способ взвешивания очень влияет на картину:
+
+```{r}
+adj.w <- adj.dfm %>% dfm_weight("propmax") 
+```
+
+```{r}
+n.lsa2 <- fit_transform(adj.w, lsa.2)
+n.lsa2 %>%
+    as.data.frame %>%
+    rownames_to_column("adj") %>%
+    ggplot(aes(x=V1, y=V2, label=adj)) + geom_text()
+```
+
+
+Теперь используем те же данные, чтобы рассмотреть сходство
+прилагательных по набору существительных, с которыми они встречаются:
+
+
+### Word similarity
+
+Сравним сходство прилагательных в оригинальном пространстве и в
+LSA-трансформированном.
+
+Сначала преобразуем dfm-матрицу в формат, пригодный для работы пакета
+lsa:
+
+```{r}
+adj.orig <- convert(adj.dfm, to="lsa")
+```
+
+Теперь выполнил LSA-трансформацию той же матрицы в двухмерное
+пространство:
+
+```{r}
+adj.lsa2 = fit_transform(t(adj.dfm), lsa.2)
+```
+
+```{r}
+adj.lsa2 %>% as.data.frame %>% rownames_to_column("noun") %>%
+    ggplot(aes(x=V1, y=V2, label=noun)) + geom_text()
+```
+
+```{r}
+adjw.lsa2 = fit_transform(t(adj.w), lsa.2)
+```
+
+```{r}
+adjw.lsa2 %>% as.data.frame %>% rownames_to_column("noun") %>%
+    ggplot(aes(x=V1, y=V2, label=noun)) + geom_text()
+```
+
+
