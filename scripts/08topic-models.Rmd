@@ -1,0 +1,408 @@
+---
+title: От слов к темам. Тематическое моделирование
+author: Кирилл Маслинский
+output: html_document
+editor_options: 
+  chunk_output_type: console
+  code_folding: show
+---
+
+## From words to topics
+
+On the example of LSA we have seen, how the word co-occurrence
+information can be used to automatically induce the semantic
+similarity between words. Topic modeling is a more modern successor to
+the idea of leveraging word co-occurrence to arrive at the level of
+topics.
+
+## Topic modeling classics: LDA
+
+```{r, eval=FALSE}
+# install.packages("mallet")
+# install.packages('rJava')
+```
+
+Before proceeding, we will limit Java to use not more than 1G of RAM. 
+
+```{r}
+options(java.parameters = "-Xmx1g")
+```
+
+Load required packages:
+
+```{r}
+library(rJava)
+library(mallet)
+library(dplyr)
+```
+
+### LDA: load data and model setup
+
+Данные по детективам. 
+
+```{r}
+library(stringr)
+meta <- read_csv("~/eu2022/data/detective/metadata.csv")
+detectives <- meta %>% filter(str_detect(genre, "detective")) %>%
+    filter(year > 1990) %>% filter(author_sex %in% c("м", "ж")) %>%
+    select(filename, author_sex, author, title, year)
+```
+
+Составим список файлов для загрузки
+
+```{r}
+det.files <- paste("~/cmta2021/data/detective/", detectives$filename, sep="")
+names(det.files) <- detectives$filename
+```
+
+Загрузим файлы по списку:
+
+```{r}
+det.df <- bind_rows(lapply(det.files, read.table, sep="\t", col.names=c("word", "lemma", "tag", "const", "var"), fill=TRUE, header=FALSE, quote=""), .id="filename")
+```
+Разметка фрагментов и чистка данных
+
+```{r}
+det.clean <- det.df %>%
+    mutate(f.id = ifelse(str_detect(word, "^<f"), str_extract(word, "[0-9]+"), NA)) %>%
+    fill(f.id) %>%
+    filter(!str_detect(word, "^<")) %>%
+    filter(tag %in% c("S", "V", "A", "ADV")) %>%
+    filter(!str_detect(const, "имя|фам|отч"))
+nrow(det.clean)
+```
+
+Преобразуем данные обратно в текстовые документы, по одному на
+500-словный фрагмент. 
+
+```{r}
+det.texts <- det.clean %>% group_by(filename, f.id) %>%
+    summarize(text = paste(lemma, collapse=" ")) %>%
+    mutate(docid = paste(filename, f.id, sep="."))
+nrow(det.texts)
+```
+
+### LDA: Model preparation
+
+Mallet will require the list of stopwords as a file, so we write out
+the standard stopwords list before processing.
+
+```{r}
+library(stopwords)
+library(readr)
+write_lines(stopwords("ru"), "stopwords.txt")
+```
+
+As a first step, mallet has to process documents texts to tokenize texts
+and to collect usage statistics. Document IDs and Document contents
+should be passed to it as character vectors. Note, that doc ids should
+be strings, not numbers, hence `as.character`.
+
+
+```{r}
+mallet.instances <- mallet.import(id.array=det.texts$docid,
+                                  text.array=det.texts$text,
+                                  stoplist="stopwords.txt")
+```
+
+Now we set the parameters for the desired model, and load the data
+prepared in the previous step. 
+
+```{r}
+topic.model <- MalletLDA(num.topics=50) # number of topics
+topic.model$loadDocuments(mallet.instances) 
+topic.model$setAlphaOptimization(20, 50) # optimizing hyperparameters
+```
+
+Next we collect some statistics about the dictionary and frequency of
+tokens for later use.
+
+```{r}
+vocabulary <- topic.model$getVocabulary() # corpus dictionary
+word.freqs <- mallet.word.freqs(topic.model) # frequency table
+## top frequent words (by doc frequency)
+word.freqs %>% arrange(desc(doc.freq)) %>% head(10)
+```
+
+### LDA: training a model
+
+The strange syntax is due to Java: here we run a `train` method of the
+object `topic.model`. The argument is the number of iterations of
+Gibbs sampling to perform.
+
+```{r}
+topic.model$train(500)
+```
+
+Selecting the best topic for each token in 10 iterations.
+
+```{r}
+topic.model$maximize(10)
+```
+
+### LDA: results
+
+Doc-topics table.
+
+```{r}
+doc.topics <- mallet.doc.topics(topic.model, smoothed=TRUE, normalized=TRUE)
+```
+
+Word-topics table.
+
+```{r}
+topic.words <- mallet.topic.words(topic.model, smoothed=TRUE, normalized=TRUE)
+```
+
+Topic labels (3 top words)
+
+```{r}
+topic.labels <- mallet.topic.labels(topic.model, topic.words, 5)
+```
+
+### Results Analysis: a Common Way
+
+Inspect the top-30 words for each topic and guess what they are about.
+
+```{r}
+for (k in 1:nrow(topic.words)) {
+    top <- paste(mallet.top.words(topic.model, topic.words[k,], 30)$words,collapse=" ")
+    cat(paste(k, top, "\n"))
+}
+```
+
+Inspect the first few documents with a given topic weight more than
+5%. We will define a function that does that for us.
+
+```{r}
+top.docs <- function(doc.topics, topic, docs, top.n=10) {
+    head(docs[order(-doc.topics[,topic])], top.n)
+}
+```
+
+An example:
+
+```{r}
+top.docs(doc.topics, 1, det.texts$text)
+```
+
+Visualizing topic similarity (hierarchical clustering) of topics.
+
+Similarity by topics co-ocurrence in documents.
+
+```{r}
+plot(mallet.topic.hclust(doc.topics, topic.words, 0), labels=topic.labels)
+```
+
+Similarity by the set of words in the topics.
+
+```{r}
+plot(mallet.topic.hclust(doc.topics, topic.words, 1), labels=topic.labels)
+```
+
+Balanced similarity by words and documents.
+
+```{r}
+plot(mallet.topic.hclust(doc.topics, topic.words, 0.5), labels=topic.labels)
+```
+
+## LDA: Interactive Visualization
+
+Install the required packages and load them.
+
+```{r eval=FALSE}
+install.packages("LDAvis")
+install.packages("servr")
+```
+
+```{r}
+library(LDAvis)
+library(servr)
+```
+
+To create this interactive visualization, the information on the
+length of all documents (in words) is required. We will count words
+using `str_count` function from `stringr` package.
+
+```{r}
+library(stringr)
+doc.length <- str_count(det.texts$text, boundary("word"))
+doc.length[doc.length==0] <- 0.000001 # avoid division by zero
+```
+
+Visualization setup.
+
+```{r}
+json <- createJSON(phi = topic.words, theta=doc.topics, doc.length=doc.length, vocab=vocabulary, term.frequency=word.freqs$term.freq)
+```
+
+Launch interactive interface.
+
+```{r eval=FALSE}
+serVis(json, out.dir="lda50", open.browser=TRUE)
+```
+
+## Topics for social science: STM
+
+Structural topic models were suggested as an extension that allows not only
+to navigate the topical content, but to examine the correlation of the
+word usage in topics with the metadata on the documents. The model allows
+to trace how document-level features are correlated with topic
+prevalence, topical content, or both.
+
+```{r eval=FALSE}
+install.packages("stm")
+```
+
+I recommend to check out [the site of the
+package](https://www.structuraltopicmodel.com/), it contains
+references and links to the supporting material.
+
+### STM: Data preparation
+
+Manifesto project data.
+
+```{r}
+library(manifestoR)
+mp_setapikey("manifesto_apikey.txt")
+us.corpus <- mp_corpus(countryname == "United States")
+us.df <- as.data.frame(us.corpus, with.meta = TRUE) %>%
+    mutate(sent_id = row_number())
+us.df <- us.df %>%
+    mutate(party=c("61320"="democratic", "61620"="republican")[as.character(party)]) 
+```
+
+We prepare the data for modeling as a dfm (using quanteda package
+tools).
+
+```{r}
+library(stringr)
+library(tidytext)
+library(quanteda)
+us.dtm <- us.df %>%
+    unnest_tokens(word, text) %>%
+    filter(! word %in% stopwords("en")) %>%
+    filter(! str_detect(word, "[0-9]+")) %>%
+    count(sent_id, word) %>%
+    cast_dfm(sent_id, word, n) %>%
+    dfm_wordstem(language = "en")
+```
+
+We will also need a table with *covariates* (document-level metadata).
+
+```{r}
+library(lubridate)
+us.meta <- us.df %>%
+    filter(sent_id %in% rownames(us.dtm)) %>%
+    mutate(date = parse_date_time(date, "%Y%m")) %>%
+    mutate(year = as.integer(year(date))) %>%
+    select(sent_id, party, date, year, text)
+docvars(us.dtm) <- us.meta
+```
+
+### STM: Run the model
+
+
+```{r}
+library(stm)
+us.stm50 <- stm(us.dtm, K=50, prevalence=~party+s(year),
+                max.em.its=50, data=us.meta,
+                init.type="Spectral", seed=8458)
+```
+
+A variant model with content covariate. 
+**CAUTION**: this STM model took more than 2 hours to train on my laptop.
+
+
+```{r eval=FALSE}
+library(stm)
+us.stm50cont <- stm(us.dtm, K=50, prevalence=~party+s(year),
+                content=us.meta$party, max.em.its=75, data=us.meta,
+                init.type="Spectral", seed=8458)
+```
+
+### STM: Explore the results
+
+As in LDA, the most basic result is the list of top words for each
+topic. 
+
+```{r}
+labelTopics(us.stm50)
+```
+
+A summary plot:
+
+```{r}
+plot(us.stm50, type="summary")
+```
+
+Top documents for a given topic:
+
+```{r}
+us.filtered <- us.df %>%
+    filter(sent_id %in% rownames(us.dtm))
+thoughts6 <- findThoughts(us.stm50, texts=us.filtered$text, n=3, topics=6)$docs[[1]]
+plotQuote(thoughts6, width=40, main="Topic 6")
+```
+
+
+### STM: Estimate effects of covariates
+
+```{r}
+stm50.effect <- estimateEffect(formula = 1:10 ~ party + s(year),
+                               stmobj = us.stm50,
+                               metadata = us.meta, uncertainty = "None")
+summary(stm50.effect)
+```
+
+Plot the covariate:
+
+```{r}
+plot(stm50.effect, covariate = "party", model = us.stm50,
+     method = "difference", cov.value1="democratic", cov.value2="republican")
+```
+
+```{r}
+plot(stm50.effect, covariate = "party", model = us.stm50,
+     method = "pointestimate")
+```
+
+```{r}
+plot(stm50.effect, covariate = "year", model = us.stm50,
+     method = "continuous")
+```
+
+
+
+## STM: Interactive Visualization
+
+
+```{r eval=FALSE}
+install.packages("stminsights")
+```
+
+Prepare the environment:
+
+```{r}
+out <- quanteda::convert(us.dtm, to = "stm", docvars = us.meta)
+
+poli <- us.stm50
+
+prep_poli <- stm50.effect
+    
+save(list=c("out", "poli", "prep_poli"), file="us.stm50.RData")
+```
+
+Run the application:
+
+```{r eval=FALSE}
+library(stminsights)
+run_stminsights()
+```
+
+Alternative interactive visualization (old package, may not work):
+
+```{r eval=FALSE}
+library(devtools)
+install_github("mroberts/stmBrowser",dependencies=TRUE)
+```
