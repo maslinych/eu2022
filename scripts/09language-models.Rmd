@@ -1,0 +1,147 @@
+---
+title: Language models at work. N-gram based text generation
+author: Kirill Maslinsky
+output: html_document
+editor_options: 
+  chunk_output_type: console
+  code_folding: show
+---
+
+### Данные
+
+Корпус из 84 детских ужастиков, 3,5 млн слов.
+
+
+```{r}
+horror.files <- list.files("data/horror", full.names=T)
+horror.files5 <- sample(list.files("data/horror", full.names=T), 5)
+```
+
+Читаем данные, создаем data frame.
+
+```{r}
+library(readr)
+horror.df <- data.frame(text=sapply(horror.files, read_file))
+```
+
+Токенизируем данные 
+
+```{r}
+library(tidytext)
+library(dplyr)
+horror.tri <- horror.df %>%
+    unnest_tokens(trigram, text, token="ngrams", n=3, to_lower=FALSE)
+```
+
+Разделяем триграммы на отдельные слова
+
+```{r}
+library(tidyr)
+horror.long <- horror.tri %>%
+    separate(trigram, into=c('w1', 'w2', 'w3'), sep=" ")
+```
+
+### Статистика N-грамм
+
+Считаем статистику по сочетаемости:
+
+Вероятность униграмм 
+
+```{r}
+unigram.stat <- horror.long %>%
+    count(w3, name="unifreq", sort=TRUE) %>%
+    mutate(uniprob = unifreq/sum(unifreq))
+```
+Вероятность биграмм
+
+```{r}
+bigram.stat <- horror.long %>%
+    count(w2, w3, name="bifreq", sort=TRUE) %>%
+    group_by(w2) %>%
+    mutate(biprob = bifreq/sum(bifreq))
+```
+
+Вероятность триграмм
+
+```{r}
+trigram.stat <- horror.long %>%
+    count(w1, w2, w3, name="trifreq", sort=TRUE) %>%
+    group_by(w1, w2) %>%
+    mutate(triprob = trifreq/sum(trifreq))
+```
+
+### Униграммная модель: 
+
+```{r}
+unigram_model <- function(data, n=10) {
+    paste(sample(data$w3, n, prob=data$uniprob), collapse=" ")
+}
+```
+
+### Биграммная модель: 
+
+Подготовка — создадим словарь со списками вероятностей
+
+```{r}
+library(collections)
+bidata <- bigram.stat %>% group_by(w2) %>% summarize(w3=list(w3), prob=list(biprob))
+bidict <- dict(items=Map(list, w3=bidata$w3, prob=bidata$prob), keys=bidata$w2)
+```
+
+Функция-генератор текста:
+
+```{r}
+bigram_model <- function(bidict, w2, n=10) {
+    text <- list()
+    text[[1]] <- w2
+    for (i in seq(2, n)) {
+        l <- bidict$get(text[[i-1]])
+        text[[i]] <- sample(l$w3, 1, prob=l$prob)
+    }
+    paste(text, collapse=" ")
+}
+```
+
+Свободный генератор:
+
+```{r}
+bigram_model(bidict, unigram_model(unigram.stat, 1), 100)
+```
+
+### Триграммная модель:
+
+Подготавливаем данные в виде словаря
+
+```{r}
+tridata <- trigram.stat %>% group_by(w1, w2) %>% summarize(w3=list(w3), prob=list(triprob))
+tridict <- dict(items=Map(list, w3=tridata$w3, prob=tridata$prob), keys=paste(tridata$w1, tridata$w2, sep=" "))
+```
+
+Функция-генератор текста:
+
+```{r}
+trigram_model <- function(tridict, w1w2, n=10) {
+    cw <- unlist(strsplit(w1w2, " "))
+    text <- list()
+    text[[1]] <- cw[1]
+    text[[2]] <- cw[2]
+    for (i in seq(3, n)) {
+        key <- paste(text[[i-2]], text[[i-1]], collapse=" ")
+        l <- tridict$get(key)
+        text[[i]] <- sample(l$w3, 1, prob=l$prob)
+    }
+    paste(text, collapse=" ")
+}
+```
+
+Свободный генератор от 1 слова:
+
+```{r}
+trigram_model(tridict, bigram_model(bidict, "Я", 2), 100)
+```
+
+Полностью свободный генератор:
+
+```{r}
+trigram_model(tridict, bigram_model(bidict, unigram_model(unigram.stat, 1), 2), 100)
+```
